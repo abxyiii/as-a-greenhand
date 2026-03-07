@@ -1,0 +1,219 @@
+# ==============================================
+# 通用导入与配置
+# ==============================================
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn import datasets
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import accuracy_score, classification_report
+import warnings
+warnings.filterwarnings('ignore')  # 忽略无关警告
+plt.rcParams['font.sans-serif'] = ['SimHei']  # 中文显示
+plt.rcParams['axes.unicode_minus'] = False    # 负号显示
+
+# ==============================================
+# 1. 数据加载与预处理（通用模块）
+# ==============================================
+def load_and_preprocess_data(dataset_name="iris"):
+    """
+    加载数据集并完成标准化预处理
+    :param dataset_name: 数据集名称（支持iris/breast_cancer）
+    :return: X_norm(标准化特征), y(标签), feature_names(特征名), class_names(类别名)
+    """
+    # 加载数据集
+    if dataset_name == "iris":
+        data = datasets.load_iris()
+    elif dataset_name == "breast_cancer":
+        data = datasets.load_breast_cancer()
+    else:
+        raise ValueError("仅支持iris/breast_cancer数据集")
+    
+    X = data.data
+    y = data.target
+    feature_names = data.feature_names
+    class_names = data.target_names if hasattr(data, 'target_names') else [f'class_{i}' for i in sorted(set(y))]
+    
+    # 标准化（对PCA和异常检测至关重要）
+    scaler = StandardScaler()
+    X_norm = scaler.fit_transform(X)
+    
+    # 划分训练/测试集（仅用于分类任务）
+    X_train, X_test, y_train, y_test = train_test_split(
+        X_norm, y, test_size=0.3, random_state=42, stratify=y
+    )
+    
+    return {
+        "X_norm": X_norm, "y": y, "feature_names": feature_names, "class_names": class_names,
+        "X_train": X_train, "X_test": X_test, "y_train": y_train, "y_test": y_test
+    }
+
+# ==============================================
+# 2. PCA降维模块
+# ==============================================
+def run_pca(X_norm, n_components=2, plot_var_ratio=True):
+    """
+    执行PCA降维并可视化方差贡献
+    :param X_norm: 标准化后的特征矩阵
+    :param n_components: 降维目标维度
+    :param plot_var_ratio: 是否绘制方差贡献图
+    :return: X_pca(降维后数据), pca_model(PCA模型)
+    """
+    from sklearn.decomposition import PCA
+    
+    # 训练PCA模型
+    pca_model = PCA(n_components=n_components, random_state=42)
+    X_pca = pca_model.fit_transform(X_norm)
+    
+    # 打印方差贡献信息
+    print(f"\n=== PCA结果 ===")
+    print(f"各主成分方差贡献: {pca_model.explained_variance_ratio_}")
+    print(f"累计方差贡献: {np.sum(pca_model.explained_variance_ratio_):.4f}")
+    
+    # 可视化方差贡献
+    if plot_var_ratio:
+        plt.figure(figsize=(10, 5))
+        components = [f'PC{i+1}' for i in range(len(pca_model.explained_variance_ratio_))]
+        plt.bar(components, pca_model.explained_variance_ratio_, color='skyblue')
+        plt.plot(components, np.cumsum(pca_model.explained_variance_ratio_), 
+                 'ro-', label='累计方差贡献')
+        plt.title('PCA主成分方差贡献')
+        plt.ylabel('方差贡献比例')
+        plt.legend()
+        plt.grid(axis='y', alpha=0.3)
+        plt.show()
+    
+    return X_pca, pca_model
+
+# ==============================================
+# 3. 异常检测模块
+# ==============================================
+def run_anomaly_detection(X_norm, contamination=0.05, plot_result=True):
+    """
+    基于椭圆包络的异常检测
+    :param X_norm: 标准化后的特征矩阵
+    :param contamination: 异常点比例（0-0.5）
+    :param plot_result: 是否可视化检测结果
+    :return: y_pred(1=正常, -1=异常), anomaly_model(异常检测模型)
+    """
+    from sklearn.covariance import EllipticEnvelope
+    
+    # 训练异常检测模型
+    anomaly_model = EllipticEnvelope(
+        contamination=contamination, 
+        random_state=42,
+        support_fraction=1.0  # 使用所有样本拟合
+    )
+    y_pred = anomaly_model.fit_predict(X_norm)
+    
+    # 统计异常点
+    n_anomalies = np.sum(y_pred == -1)
+    print(f"\n=== 异常检测结果 ===")
+    print(f"总样本数: {len(X_norm)}")
+    print(f"检测到异常点数: {n_anomalies} ({n_anomalies/len(X_norm)*100:.2f}%)")
+    
+    # 可视化检测结果（仅当降维到2D时）
+    if plot_result and X_norm.shape[1] >= 2:
+        # 先降维到2D用于可视化
+        X_pca, _ = run_pca(X_norm, n_components=2, plot_var_ratio=False)
+        
+        plt.figure(figsize=(10, 8))
+        # 正常点
+        plt.scatter(
+            X_pca[y_pred == 1, 0], X_pca[y_pred == 1, 1],
+            c='blue', marker='.', alpha=0.6, label='正常样本'
+        )
+        # 异常点
+        plt.scatter(
+            X_pca[y_pred == -1, 0], X_pca[y_pred == -1, 1],
+            c='red', marker='x', s=100, label='异常样本'
+        )
+        plt.title('异常检测结果（PCA降维可视化）')
+        plt.xlabel('主成分1')
+        plt.ylabel('主成分2')
+        plt.legend()
+        plt.grid(alpha=0.3)
+        plt.show()
+    
+    return y_pred, anomaly_model
+
+# ==============================================
+# 4. 决策树分类模块
+# ==============================================
+def run_decision_tree(X_train, X_test, y_train, y_test, class_names, plot_tree=True):
+    """
+    训练决策树分类模型并评估
+    :param X_train/X_test: 训练/测试特征
+    :param y_train/y_test: 训练/测试标签
+    :param class_names: 类别名称列表
+    :param plot_tree: 是否可视化决策树
+    :return: dt_model(决策树模型)
+    """
+    from sklearn import tree
+    
+    # 训练决策树（基于信息熵）
+    dt_model = tree.DecisionTreeClassifier(
+        criterion='entropy',    # 信息熵划分
+        max_depth=5,            # 限制树深度防止过拟合
+        min_samples_leaf=3,     # 叶节点最小样本数
+        random_state=42
+    )
+    dt_model.fit(X_train, y_train)
+    
+    # 模型评估
+    y_pred_train = dt_model.predict(X_train)
+    y_pred_test = dt_model.predict(X_test)
+    train_acc = accuracy_score(y_train, y_pred_train)
+    test_acc = accuracy_score(y_test, y_pred_test)
+    
+    print(f"\n=== 决策树分类结果 ===")
+    print(f"训练集准确率: {train_acc:.4f}")
+    print(f"测试集准确率: {test_acc:.4f}")
+    print("\n测试集分类报告:")
+    print(classification_report(y_test, y_pred_test, target_names=class_names))
+    
+    # 可视化决策树
+    if plot_tree:
+        plt.figure(figsize=(15, 10))
+        tree.plot_tree(
+            dt_model,
+            filled=True,
+            feature_names=[f'feat_{i}' for i in range(X_train.shape[1])],
+            class_names=class_names,
+            rounded=True,
+            fontsize=8
+        )
+        plt.title('决策树可视化')
+        plt.show()
+    
+    return dt_model
+
+# ==============================================
+# 5. 主流程执行
+# ==============================================
+if __name__ == "__main__":
+    # Step 1: 加载并预处理数据
+    data_dict = load_and_preprocess_data(dataset_name="iris")
+    
+    # Step 2: PCA降维（降维到2D用于可视化）
+    X_pca, pca_model = run_pca(data_dict["X_norm"], n_components=2)
+    
+    # Step 3: 异常检测（标记异常样本）
+    y_anomaly, anomaly_model = run_anomaly_detection(data_dict["X_norm"], contamination=0.05)
+    
+    # Step 4: 过滤异常样本后训练决策树
+    # 仅使用正常样本训练（可选步骤）
+    normal_mask = y_anomaly == 1
+    X_train_clean = data_dict["X_train"][normal_mask[:len(data_dict["X_train"])]]
+    y_train_clean = data_dict["y_train"][normal_mask[:len(data_dict["X_train"])]]
+    
+    # 训练决策树
+    dt_model = run_decision_tree(
+        X_train_clean, data_dict["X_test"], 
+        y_train_clean, data_dict["y_test"],
+        data_dict["class_names"]
+    )
+    
+    print("\n=== 项目流程完成 ===")
+    print("1. 数据预处理完成 | 2. PCA降维完成 | 3. 异常检测完成 | 4. 决策树分类完成")
