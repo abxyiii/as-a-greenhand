@@ -1,0 +1,192 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import PolynomialFeatures
+from sklearn.linear_model import LinearRegression
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.metrics import confusion_matrix, accuracy_score
+
+# ===================== 通用工具函数 =====================
+def calculate_classification_metrics(y_true, y_pred):
+    """
+    计算分类任务的核心评估指标
+    参数说明：
+        y_true: array, 真实标签（如质量好坏的真实值）
+        y_pred: array, 模型预测标签
+    返回：
+        metrics: dict, 包含精确率、召回率、特异度、F1分数的字典
+    """
+    # 计算混淆矩阵
+    cm = confusion_matrix(y_true, y_pred)
+    # 提取混淆矩阵四值
+    TP = cm[1, 1]  # 真正例：实际正类，预测正类
+    TN = cm[0, 0]  # 真负例：实际负类，预测负类
+    FP = cm[0, 1]  # 假正例：实际负类，预测正类（误报）
+    FN = cm[1, 0]  # 假负例：实际正类，预测负类（漏报）
+    
+    # 计算核心指标（处理分母为0的边界情况）
+    precision = TP / (TP + FP) if (TP + FP) != 0 else 0.0  # 精确率
+    recall = TP / (TP + FN) if (TP + FN) != 0 else 0.0     # 召回率
+    specificity = TN / (TN + FP) if (TN + FP) != 0 else 0.0 # 特异度
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) != 0 else 0.0 # F1分数
+    
+    return {
+        "precision": round(precision, 4),
+        "recall": round(recall, 4),
+        "specificity": round(specificity, 4),
+        "f1": round(f1, 4),
+        "confusion_matrix": cm
+    }
+
+# ===================== 实战1：酶活性预测（回归任务） =====================
+def enzyme_activity_prediction():
+    """
+    酶活性预测：基于温度的非线性回归任务
+    核心逻辑：线性模型无法拟合抛物线分布 → 构造二次多项式特征解决欠拟合
+    """
+    # -------------------- 1. 模拟生成数据（模拟真实场景的数据载入） --------------------
+    # 参数说明：
+    #   np.random.seed(0): 固定随机种子，保证结果可复现
+    #   temperature: 温度特征，范围40-90℃，共100个样本
+    #   rate: 酶活性（目标值），基于二次函数+噪声生成，模拟真实非线性数据
+    np.random.seed(0)
+    temperature = np.random.uniform(40, 90, 100).reshape(-1, 1)  # 特征：温度，形状(样本数, 特征数)
+    noise = np.random.normal(0, 5, 100).reshape(-1, 1)           # 随机噪声，模拟真实数据误差
+    rate = -0.05 * (temperature - 65)**2 + 80 + noise            # 酶活性：二次函数+噪声
+    
+    # -------------------- 2. 数据分离（训练集/测试集） --------------------
+    # 参数说明：
+    #   test_size=0.3: 测试集占比30%，训练集70%
+    #   random_state=42: 固定随机种子，保证划分结果可复现
+    X_train, X_test, y_train, y_test = train_test_split(
+        temperature, rate, test_size=0.3, random_state=42
+    )
+    
+    # -------------------- 3. 特征工程：构造多项式特征（解决非线性拟合） --------------------
+    # 参数说明：
+    #   degree=2: 构造二次多项式特征（x, x²），解决线性模型欠拟合问题
+    #   include_bias=False: 不生成偏置项（线性回归会自动处理）
+    poly = PolynomialFeatures(degree=2, include_bias=False)
+    X_train_poly = poly.fit_transform(X_train)  # 训练集：拟合+转换（仅在训练集拟合，防止数据泄露）
+    X_test_poly = poly.transform(X_test)        # 测试集：仅转换
+    
+    # -------------------- 4. 模型训练（线性回归） --------------------
+    # 参数说明：
+    #   LinearRegression(): 线性回归模型，默认参数（无正则化）
+    lr = LinearRegression()
+    lr.fit(X_train_poly, y_train)  # 用多项式特征训练模型
+    
+    # -------------------- 5. 模型预测与可视化 --------------------
+    # 生成连续温度点（40-90℃，300个点），用于绘制平滑拟合曲线
+    X_range = np.linspace(40, 90, 300).reshape(-1, 1)
+    X_range_poly = poly.transform(X_range)  # 转换为多项式特征
+    y_range_pred = lr.predict(X_range_poly) # 预测连续温度对应的酶活性
+    
+    # 可视化拟合结果
+    plt.figure(figsize=(10, 6))
+    plt.scatter(X_train, y_train, label="训练集数据", alpha=0.7)
+    plt.scatter(X_test, y_test, label="测试集数据", alpha=0.7, marker='x')
+    plt.plot(X_range, y_range_pred, color='red', label="二次多项式拟合曲线")
+    plt.xlabel("温度(℃)")
+    plt.ylabel("酶活性")
+    plt.title("酶活性预测：温度 vs 酶活性")
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+    
+    # -------------------- 6. 模型评估（回归任务） --------------------
+    train_score = lr.score(X_train_poly, y_train)  # 训练集R²分数（拟合程度）
+    test_score = lr.score(X_test_poly, y_test)     # 测试集R²分数（泛化能力）
+    print("===== 酶活性预测（回归任务）评估结果 =====")
+    print(f"训练集R²分数: {train_score:.4f}")
+    print(f"测试集R²分数: {test_score:.4f}")
+    print("----------------------------------------\n")
+
+# ===================== 实战2：质量好坏预测（分类任务） =====================
+def quality_prediction():
+    """
+    质量好坏预测：基于双特征的二分类任务
+    核心逻辑：KNN模型调参 → 决策区域可视化 → 混淆矩阵评估
+    """
+    # -------------------- 1. 模拟生成数据（模拟真实场景的数据载入） --------------------
+    # 参数说明：
+    #   np.random.seed(1): 固定随机种子，保证结果可复现
+    #   X: 双特征数据（x1, x2），范围0-10，共200个样本
+    #   y: 标签（0=bad，1=good），基于特征阈值生成
+    np.random.seed(1)
+    X = np.random.uniform(0, 10, (200, 2))  # 特征：(样本数, 特征数)，x1和x2
+    # 生成标签：x1+x2>10 且 x1*x2>20 为good(1)，否则为bad(0)
+    y = np.where((X[:,0] + X[:,1] > 10) & (X[:,0] * X[:,1] > 20), 1, 0)
+    
+    # -------------------- 2. 数据分离（训练集/测试集） --------------------
+    # 参数说明：
+    #   test_size=0.4: 测试集占比40%，训练集60%
+    #   random_state=4: 固定随机种子，保证划分结果可复现
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.4, random_state=4
+    )
+    
+    # -------------------- 3. 模型训练（KNN分类） --------------------
+    # 参数说明：
+    #   n_neighbors=5: KNN邻居数（核心参数），值越小模型越复杂，易过拟合；值越大越简单，易欠拟合
+    #   weights='uniform': 权重方式，uniform=等权重，distance=距离加权
+    #   metric='euclidean': 距离度量方式，欧几里得距离
+    knn = KNeighborsClassifier(
+        n_neighbors=5,    # 核心参数：邻居数
+        weights='uniform',# 权重方式
+        metric='euclidean'# 距离度量
+    )
+    knn.fit(X_train, y_train)  # 训练KNN模型
+    
+    # -------------------- 4. 决策区域可视化 --------------------
+    # 生成网格数据（覆盖0-10范围，步长0.05），用于绘制决策区域
+    xx, yy = np.meshgrid(np.arange(0, 10, 0.05), np.arange(0, 10, 0.05))
+    x_range = np.c_[xx.ravel(), yy.ravel()]  # 展平为特征矩阵
+    y_range_pred = knn.predict(x_range)      # 预测网格点标签
+    
+    # 可视化决策区域
+    plt.figure(figsize=(10, 6))
+    # 绘制决策区域
+    plt.scatter(x_range[:,0][y_range_pred==0], x_range[:,1][y_range_pred==0], 
+                color='lightcoral', alpha=0.3, label="预测bad区域")
+    plt.scatter(x_range[:,0][y_range_pred==1], x_range[:,1][y_range_pred==1], 
+                color='lightgreen', alpha=0.3, label="预测good区域")
+    # 绘制训练/测试数据点
+    plt.scatter(X_train[:,0], X_train[:,1], c=y_train, cmap='coolwarm', 
+                edgecolors='k', label="训练集")
+    plt.scatter(X_test[:,0], X_test[:,1], c=y_test, cmap='coolwarm', 
+                edgecolors='k', marker='s', label="测试集")
+    plt.xlabel("特征x1")
+    plt.ylabel("特征x2")
+    plt.title("质量好坏预测：KNN决策区域")
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+    
+    # -------------------- 5. 模型预测与评估 --------------------
+    y_test_pred = knn.predict(X_test)  # 测试集预测
+    metrics = calculate_classification_metrics(y_test, y_test_pred)  # 计算评估指标
+    
+    print("===== 质量好坏预测（分类任务）评估结果 =====")
+    print(f"混淆矩阵:\n{metrics['confusion_matrix']}")
+    print(f"精确率(Precision): {metrics['precision']}")
+    print(f"召回率(Recall): {metrics['recall']}")
+    print(f"特异度(Specificity): {metrics['specificity']}")
+    print(f"F1分数: {metrics['f1']}")
+    print(f"准确率(Accuracy): {accuracy_score(y_test, y_test_pred):.4f}")
+    print("----------------------------------------\n")
+
+# ===================== 主函数：执行全流程 =====================
+if __name__ == "__main__":
+    # 执行酶活性预测（回归任务）
+    enzyme_activity_prediction()
+    
+    # 执行质量好坏预测（分类任务）
+    quality_prediction()
+    
+    # 核心总结输出
+    print("===== 项目核心总结 =====")
+    print("1. 数据预处理：多项式特征解决回归任务的欠拟合问题")
+    print("2. 模型调参：KNN的n_neighbors是平衡过拟合/欠拟合的核心参数")
+    print("3. 模型评估：回归看R²，分类看混淆矩阵+F1分数（数据不平衡时）")
