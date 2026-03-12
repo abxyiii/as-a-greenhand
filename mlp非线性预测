@@ -1,0 +1,388 @@
+一，mlp二分类模板
+# ==============================================
+# 1. 导入核心库（注释说明每个库的作用）
+# ==============================================
+import pandas as pd  # 数据处理：读取csv、数据清洗
+import numpy as np   # 数值计算：数组操作、矩阵运算
+import matplotlib.pyplot as plt  # 可视化：绘制决策边界、训练曲线
+from sklearn.model_selection import train_test_split  # 数据集拆分：训练集/测试集
+from sklearn.metrics import accuracy_score  # 评估指标：计算分类准确率
+
+# Keras核心模块（重点注释每个组件的作用）
+from keras.models import Sequential  # 模型容器：线性堆叠层（适合MLP）
+from keras.layers import Dense       # 全连接层：MLP的核心计算层
+from keras.optimizers import Adam    # 优化器：自适应学习率（比SGD更高效）
+from keras.losses import BinaryCrossentropy  # 损失函数：二分类专用
+from keras.metrics import Accuracy   # 评估指标：准确率
+
+# ==============================================
+# 2. 数据预处理（通用模板，可替换为自己的数据集）
+# ==============================================
+def load_and_preprocess_data(file_path="./data/binary_data.csv"):
+    """
+    加载并预处理二分类数据
+    参数说明：
+        file_path: 数据文件路径（csv格式，最后一列是标签，其余是特征）
+    返回值：
+        X_train/X_test: 训练/测试特征（numpy数组）
+        y_train/y_test: 训练/测试标签（numpy数组）
+    """
+    # 读取csv数据（假设无表头，若有表头需加header=0）
+    data = pd.read_csv(file_path, header=None)
+    
+    # 拆分特征和标签（最后一列是标签，其余是特征）
+    X = data.iloc[:, :-1].values  # 特征：所有行，除最后一列外的所有列
+    y = data.iloc[:, -1].values   # 标签：所有行，最后一列
+    
+    # 数据集拆分（关键参数注释）
+    X_train, X_test, y_train, y_test = train_test_split(
+        X,                  # 完整特征集
+        y,                  # 完整标签集
+        test_size=0.3,      # 测试集占比30%（可调：0.2-0.4）
+        random_state=42,    # 随机种子（固定值保证结果可复现）
+        stratify=y          # 分层拆分（保证训练/测试集标签分布一致）
+    )
+    
+    # 数据归一化（MLP必须做！否则训练不收敛）
+    X_train = (X_train - X_train.mean(axis=0)) / X_train.std(axis=0)
+    X_test = (X_test - X_train.mean(axis=0)) / X_train.std(axis=0)
+    
+    return X_train, X_test, y_train, y_test
+
+# ==============================================
+# 3. 构建MLP模型（核心参数详细注释）
+# ==============================================
+def build_mlp_binary(input_dim):
+    """
+    构建二分类MLP模型
+    参数说明：
+        input_dim: 输入特征维度（即特征列数）
+    返回值：
+        model: 编译好的Keras模型
+    """
+    # 初始化顺序模型（线性堆叠层）
+    model = Sequential(name="MLP_Binary_Classifier")
+    
+    # 第一层隐藏层（必须指定input_dim，后续层自动推断）
+    model.add(Dense(
+        units=32,               # 神经元数量（经验值：特征数的2倍，可调：16/64/128）
+        activation="relu",      # 激活函数（隐藏层首选ReLU，缓解梯度消失）
+        input_dim=input_dim,    # 输入特征维度（必须和数据特征数一致）
+        kernel_initializer="he_normal",  # 权重初始化（ReLU专用，避免梯度消失）
+        name="hidden_layer_1"
+    ))
+    
+    # 第二层隐藏层（可选，复杂数据可加多层）
+    model.add(Dense(
+        units=16,               # 神经元数量（逐层递减，如32→16→8）
+        activation="relu",
+        kernel_initializer="he_normal",
+        name="hidden_layer_2"
+    ))
+    
+    # 输出层（二分类核心配置）
+    model.add(Dense(
+        units=1,                # 二分类输出1个神经元（0/1概率）
+        activation="sigmoid",   # 输出层激活：sigmoid（输出0-1概率）
+        kernel_initializer="glorot_normal",
+        name="output_layer"
+    ))
+    
+    # 编译模型（训练核心配置）
+    model.compile(
+        optimizer=Adam(
+            learning_rate=0.001,  # 学习率（关键参数：过大不收敛，过小训练慢）
+            beta_1=0.9,           # 一阶矩估计衰减率（默认0.9，无需改）
+            beta_2=0.999          # 二阶矩估计衰减率（默认0.999，无需改）
+        ),
+        loss=BinaryCrossentropy(),  # 二分类损失函数（比mse更适合）
+        metrics=[Accuracy(name="accuracy")]  # 训练过程中监控准确率
+    )
+    
+    # 打印模型结构（方便检查层数/参数）
+    model.summary()
+    
+    return model
+
+# ==============================================
+# 4. 训练模型+评估（关键参数注释）
+# ==============================================
+def train_and_evaluate_model(model, X_train, y_train, X_test, y_test):
+    """
+    训练并评估模型
+    参数说明：
+        model: 编译好的模型
+        X_train/X_test: 训练/测试特征
+        y_train/y_test: 训练/测试标签
+    返回值：
+        history: 训练历史（包含损失/准确率曲线）
+        test_acc: 测试集准确率
+    """
+    # 训练模型（核心参数注释）
+    history = model.fit(
+        X_train,          # 训练特征
+        y_train,          # 训练标签
+        batch_size=32,    # 批次大小（经验值：16/32/64，越大训练越快）
+        epochs=50,        # 训练轮数（可根据早停调整）
+        verbose=1,        # 训练日志：1=显示进度条，0=静默，2=每轮显示一次
+        validation_split=0.1,  # 验证集占训练集的10%（监控过拟合）
+        shuffle=True      # 每轮训练前打乱数据（避免顺序影响）
+    )
+    
+    # 评估测试集
+    test_loss, test_acc = model.evaluate(X_test, y_test, verbose=0)
+    print(f"\n测试集准确率：{test_acc:.4f}")
+    
+    # 预测示例（输出前5个样本的概率和标签）
+    y_pred_prob = model.predict(X_test[:5], verbose=0)  # 预测概率（0-1）
+    y_pred = (y_pred_prob > 0.5).astype(int)            # 概率转标签（>0.5为1）
+    print("\n前5个样本预测结果：")
+    print(f"真实标签：{y_test[:5]}")
+    print(f"预测标签：{y_pred.flatten()}")
+    
+    return history, test_acc
+
+# ==============================================
+# 5. 可视化训练过程（辅助调参）
+# ==============================================
+def plot_training_history(history):
+    """
+    绘制训练损失和准确率曲线
+    参数说明：
+        history: model.fit()返回的训练历史
+    """
+    plt.figure(figsize=(12, 4))
+    
+    # 绘制损失曲线
+    plt.subplot(1, 2, 1)
+    plt.plot(history.history["loss"], label="训练损失")
+    plt.plot(history.history["val_loss"], label="验证损失")
+    plt.title("训练/验证损失曲线")
+    plt.xlabel("Epoch（轮数）")
+    plt.ylabel("Loss（损失）")
+    plt.legend()
+    
+    # 绘制准确率曲线
+    plt.subplot(1, 2, 2)
+    plt.plot(history.history["accuracy"], label="训练准确率")
+    plt.plot(history.history["val_accuracy"], label="验证准确率")
+    plt.title("训练/验证准确率曲线")
+    plt.xlabel("Epoch（轮数）")
+    plt.ylabel("Accuracy（准确率）")
+    plt.legend()
+    
+    plt.tight_layout()
+    plt.savefig("./training_history_binary.png")  # 保存图片
+    plt.show()
+
+# ==============================================
+# 6. 主函数（一键运行）
+# ==============================================
+if __name__ == "__main__":
+    # 步骤1：加载数据
+    print("=== 加载并预处理数据 ===")
+    X_train, X_test, y_train, y_test = load_and_preprocess_data()
+    
+    # 步骤2：构建模型
+    print("\n=== 构建MLP模型 ===")
+    input_dim = X_train.shape[1]  # 输入特征维度=特征列数
+    model = build_mlp_binary(input_dim)
+    
+    # 步骤3：训练模型
+    print("\n=== 开始训练模型 ===")
+    history, test_acc = train_and_evaluate_model(model, X_train, y_train, X_test, y_test)
+    
+    # 步骤4：可视化训练过程
+    print("\n=== 绘制训练曲线 ===")
+    plot_training_history(history)
+    
+    # 步骤5：保存模型（可选，方便后续加载使用）
+    model.save("./mlp_binary_model.h5")
+    print("\n模型已保存为：mlp_binary_model.h5")
+
+二，mlp多分类模板# ==============================================
+# 1. 导入核心库（多分类专用扩展）
+# ==============================================
+import numpy as np
+import matplotlib.pyplot as plt
+from keras.datasets import mnist  # 内置MNIST手写数字数据集
+from keras.models import Sequential
+from keras.layers import Dense
+from keras.optimizers import Adam
+from keras.losses import CategoricalCrossentropy  # 多分类损失函数
+from keras.metrics import CategoricalAccuracy     # 多分类准确率
+from keras.utils import to_categorical            # One-Hot编码
+from keras.callbacks import EarlyStopping         # 早停（防止过拟合）
+
+# ==============================================
+# 2. 加载MNIST数据（多分类经典数据集）
+# ==============================================
+def load_mnist_data():
+    """
+    加载并预处理MNIST多分类数据（手写数字0-9）
+    返回值：
+        X_train/X_test: 归一化后的训练/测试特征（28*28=784维）
+        y_train_onehot/y_test_onehot: One-Hot编码后的训练/测试标签
+        y_test: 原始测试标签（用于最终评估）
+    """
+    # 加载MNIST数据集（自动下载，首次运行需联网）
+    (X_train, y_train), (X_test, y_test) = mnist.load_data()
+    
+    # 步骤1：图像展平（28x28 → 784维向量）
+    feature_size = 28 * 28
+    X_train = X_train.reshape(X_train.shape[0], feature_size)  # (60000, 784)
+    X_test = X_test.reshape(X_test.shape[0], feature_size)    # (10000, 784)
+    
+    # 步骤2：归一化（0-255像素值 → 0-1）
+    X_train = X_train.astype("float32") / 255.0
+    X_test = X_test.astype("float32") / 255.0
+    
+    # 步骤3：标签One-Hot编码（多分类必须！）
+    # 例如：标签5 → [0,0,0,0,0,1,0,0,0,0]
+    y_train_onehot = to_categorical(y_train, num_classes=10)
+    y_test_onehot = to_categorical(y_test, num_classes=10)
+    
+    return X_train, X_test, y_train_onehot, y_test_onehot, y_test
+
+# ==============================================
+# 3. 构建多分类MLP模型（核心参数注释）
+# ==============================================
+def build_mlp_multi(input_dim, num_classes=10):
+    """
+    构建多分类MLP模型
+    参数说明：
+        input_dim: 输入特征维度（MNIST=784）
+        num_classes: 类别数（MNIST=10）
+    返回值：
+        model: 编译好的模型
+    """
+    model = Sequential(name="MLP_Multi_Classifier")
+    
+    # 第一层隐藏层
+    model.add(Dense(
+        units=512,              # 神经元数量（复杂数据可增大）
+        activation="relu",
+        input_dim=input_dim,
+        kernel_initializer="he_normal",
+        name="hidden_layer_1"
+    ))
+    
+    # 第二层隐藏层
+    model.add(Dense(
+        units=256,
+        activation="relu",
+        kernel_initializer="he_normal",
+        name="hidden_layer_2"
+    ))
+    
+    # 输出层（多分类核心配置）
+    model.add(Dense(
+        units=num_classes,     # 输出神经元数=类别数（10）
+        activation="softmax",  # 多分类激活：softmax（输出概率和为1）
+        kernel_initializer="glorot_normal",
+        name="output_layer"
+    ))
+    
+    # 编译模型（多分类专用）
+    model.compile(
+        optimizer=Adam(learning_rate=0.001),
+        loss=CategoricalCrossentropy(),  # 多分类损失函数
+        metrics=[CategoricalAccuracy(name="accuracy")]  # 多分类准确率
+    )
+    
+    model.summary()
+    return model
+
+# ==============================================
+# 4. 训练+评估（含早停防过拟合）
+# ==============================================
+def train_multi_class_model(model, X_train, y_train, X_test, y_test_onehot, y_test):
+    """
+    训练多分类模型（含早停）
+    参数说明：
+        model: 编译好的模型
+        X_train/y_train: 训练特征/One-Hot标签
+        X_test/y_test_onehot: 测试特征/One-Hot标签
+        y_test: 原始测试标签（用于评估）
+    """
+    # 早停回调（关键：防止过拟合）
+    early_stopping = EarlyStopping(
+        monitor="val_loss",    # 监控验证集损失
+        patience=5,            # 连续5轮验证损失不下降则停止
+        restore_best_weights=True  # 恢复最优权重（避免最后几轮过拟合）
+    )
+    
+    # 训练模型
+    history = model.fit(
+        X_train,
+        y_train,
+        batch_size=64,
+        epochs=20,
+        verbose=1,
+        validation_split=0.1,
+        shuffle=True,
+        callbacks=[early_stopping]  # 加入早停回调
+    )
+    
+    # 评估测试集
+    test_loss, test_acc = model.evaluate(X_test, y_test_onehot, verbose=0)
+    print(f"\n测试集准确率：{test_acc:.4f}")
+    
+    # 预测示例（前5个样本）
+    y_pred_prob = model.predict(X_test[:5], verbose=0)  # 预测概率（10类概率）
+    y_pred = np.argmax(y_pred_prob, axis=1)             # 取概率最大的类别
+    print("\n前5个样本预测结果：")
+    print(f"真实标签：{y_test[:5]}")
+    print(f"预测标签：{y_pred}")
+    
+    return history, test_acc
+
+# ==============================================
+# 5. 可视化+主函数
+# ==============================================
+def plot_multi_history(history):
+    """绘制多分类训练曲线"""
+    plt.figure(figsize=(12, 4))
+    # 损失曲线
+    plt.subplot(1, 2, 1)
+    plt.plot(history.history["loss"], label="训练损失")
+    plt.plot(history.history["val_loss"], label="验证损失")
+    plt.title("训练/验证损失")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.legend()
+    # 准确率曲线
+    plt.subplot(1, 2, 2)
+    plt.plot(history.history["accuracy"], label="训练准确率")
+    plt.plot(history.history["val_accuracy"], label="验证准确率")
+    plt.title("训练/验证准确率")
+    plt.xlabel("Epoch")
+    plt.ylabel("Accuracy")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig("./training_history_multi.png")
+    plt.show()
+
+if __name__ == "__main__":
+    # 加载数据
+    print("=== 加载MNIST数据 ===")
+    X_train, X_test, y_train_onehot, y_test_onehot, y_test = load_mnist_data()
+    
+    # 构建模型
+    print("\n=== 构建多分类MLP模型 ===")
+    input_dim = X_train.shape[1]
+    model = build_mlp_multi(input_dim, num_classes=10)
+    
+    # 训练模型
+    print("\n=== 开始训练模型 ===")
+    history, test_acc = train_multi_class_model(
+        model, X_train, y_train_onehot, X_test, y_test_onehot, y_test
+    )
+    
+    # 可视化
+    print("\n=== 绘制训练曲线 ===")
+    plot_multi_history(history)
+    
+    # 保存模型
+    model.save("./mlp_multi_model.h5")
+    print("\n模型已保存为：mlp_multi_model.h5")
