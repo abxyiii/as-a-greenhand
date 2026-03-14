@@ -1,0 +1,128 @@
+# ==============================================
+# 卷积神经网络 CNN 完整项目代码（含自定义CNN + 迁移学习）
+# 适用场景：猫狗二分类 / 图像二分类任务
+# 框架：TensorFlow/Keras
+# ==============================================
+
+# 1. 导入所有依赖库（统一导入）
+import numpy as np
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Conv2D, MaxPooling2D, Flatten, Dense
+from tensorflow.keras.preprocessing.image import ImageDataGenerator, load_img, img_to_array
+from tensorflow.keras.applications.vgg16 import VGG16, preprocess_input
+
+# ==============================================
+# 一、全局参数配置（所有任务共用）
+# ==============================================
+# 图像尺寸配置
+IMG_SIZE_CUSTOM = 50    # 自定义CNN输入图像大小
+IMG_SIZE_VGG = 224     # VGG16要求固定输入大小
+# 训练参数
+BATCH_SIZE = 32        # 批次大小：每次训练加载的图片数量
+EPOCHS_CNN = 15        # 自定义CNN训练轮数
+EPOCHS_MLP = 30        # 迁移学习MLP训练轮数
+# 数据集路径（请根据自己的文件夹修改）
+TRAIN_PATH = "./Dataset/training set"
+
+# ==============================================
+# 二、任务1：自定义CNN模型训练（完整流程）
+# ==============================================
+# --------------------------
+# 步骤1：图像数据加载与预处理
+# --------------------------
+# 图像生成器：将像素值归一化到 [0,1]，提升训练稳定性
+datagen = ImageDataGenerator(rescale=1./255)
+
+# 从文件夹加载训练数据（子文件夹名自动作为分类标签）
+train_set = datagen.flow_from_directory(
+    TRAIN_PATH,
+    target_size=(IMG_SIZE_CUSTOM, IMG_SIZE_CUSTOM),  # 统一resize图像尺寸
+    batch_size=BATCH_SIZE,
+    class_mode="binary"  # 二分类任务
+)
+
+# --------------------------
+# 步骤2：构建自定义CNN模型
+# --------------------------
+custom_cnn = Sequential()
+# 第一层卷积：32个3x3卷积核 + ReLU激活 + 最大池化
+custom_cnn.add(Conv2D(32, (3,3), activation="relu", input_shape=(IMG_SIZE_CUSTOM, IMG_SIZE_CUSTOM, 3)))
+custom_cnn.add(MaxPooling2D(pool_size=(2,2)))
+# 第二层卷积：加深网络，提取更复杂特征
+custom_cnn.add(Conv2D(32, (3,3), activation="relu"))
+custom_cnn.add(MaxPooling2D(pool_size=(2,2)))
+# 展平层：将2D特征图转为1D向量，适配全连接层
+custom_cnn.add(Flatten())
+# 全连接层：特征整合 + 分类输出
+custom_cnn.add(Dense(128, activation="relu"))
+custom_cnn.add(Dense(1, activation="sigmoid"))  # 输出0~1概率值（二分类）
+
+# --------------------------
+# 步骤3：编译与训练CNN
+# --------------------------
+custom_cnn.compile(optimizer="adam", loss="binary_crossentropy", metrics=["accuracy"])
+custom_cnn.fit(train_set, epochs=EPOCHS_CNN)
+
+# ==============================================
+# 三、任务2：VGG16迁移学习 + MLP分类（完整流程）
+# ==============================================
+# --------------------------
+# 步骤1：加载预训练VGG16（只做特征提取，不训练卷积层）
+# --------------------------
+# weights="imagenet"：加载在百万级数据集上训练好的权重
+# include_top=False：去掉原模型全连接层，只保留特征提取部分
+vgg_base = VGG16(weights="imagenet", include_top=False, input_shape=(IMG_SIZE_VGG, IMG_SIZE_VGG, 3))
+
+# --------------------------
+# 步骤2：构建MLP分类头（接收VGG特征，完成分类）
+# --------------------------
+# VGG16输出特征维度：7*7*512 = 25088
+mlp_model = Sequential()
+mlp_model.add(Dense(10, activation="relu", input_dim=25088))
+mlp_model.add(Dense(1, activation="sigmoid"))
+mlp_model.compile(optimizer="adam", loss="binary_crossentropy", metrics=["accuracy"])
+
+# --------------------------
+# 步骤3：批量提取VGG特征 + 训练MLP（演示流程）
+# --------------------------
+# 实际使用时：用vgg_base.predict批量提取所有训练集特征后输入mlp_model.fit
+# 示例伪代码：
+# features = vgg_base.predict(train_set)
+# features_flat = features.reshape(len(features), -1)
+# mlp_model.fit(features_flat, train_set.labels, epochs=EPOCHS_MLP)
+
+# ==============================================
+# 四、单张图像预测函数（共用接口）
+# ==============================================
+def predict_image(img_path, model_type="cnn"):
+    """
+    单张图像预测
+    :param img_path: 图片路径
+    :param model_type: cnn=自定义CNN / vgg=迁移学习模型
+    :return: 预测结果（猫/狗）
+    """
+    # 1. 加载并预处理图像
+    if model_type == "cnn":
+        img = load_img(img_path, target_size=(IMG_SIZE_CUSTOM, IMG_SIZE_CUSTOM))
+        img_array = img_to_array(img) / 255.0
+        img_array = np.expand_dims(img_array, axis=0)
+        pred = custom_cnn.predict(img_array)[0][0]
+    else:
+        img = load_img(img_path, target_size=(IMG_SIZE_VGG, IMG_SIZE_VGG))
+        img_array = img_to_array(img)
+        img_array = np.expand_dims(img_array, axis=0)
+        img_array = preprocess_input(img_array)
+        feat = vgg_base.predict(img_array)
+        feat_flat = feat.reshape(1, -1)
+        pred = mlp_model.predict(feat_flat)[0][0]
+    
+    # 输出结果
+    label = "狗" if pred > 0.5 else "猫"
+    print(f"预测类别：{label}，置信度：{abs(pred-0.5)*2:.2f}")
+    return label
+
+# ==============================================
+# 五、运行预测（直接调用）
+# ==============================================
+# predict_image("test.jpg", model_type="cnn")
+# predict_image("test.jpg", model_type="vgg")
